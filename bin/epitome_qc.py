@@ -85,7 +85,7 @@ def consolidate_seqs(sequences: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 def filter_seqs(
     data: List[Dict[str, Any]],
-    amb_thresh: float,
+    amb_threshold: float,
     z_threshold: float,
     min_canonical: int,
     metadata_map: Optional[Dict[str, Dict[str, Any]]] = None,
@@ -117,9 +117,9 @@ def filter_seqs(
                 if isinstance(m, dict) and m.get("canonical") is True:
                     lengths_select.append(d["length"])
 
-    if not lengths or len(lengths) < min_canonical:
+    if not lengths_select or len(lengths_select) < int(min_canonical):
         LOGGER.info("Using all sequences for length filtering (Too few canonical sequences supplied)")
-        lengths_select = lengths
+        lengths = lengths_select
     else:
         LOGGER.info(f"Using canonical sequences for length filtering (n={len(lengths_select)})")
 
@@ -160,7 +160,7 @@ def filter_seqs(
         robust_z = (length - med_len) / mad_sigma if mad_sigma > 0 else 0.0
 
         fail_illegal = len(illegal) > 0
-        fail_amb = amb_ratio > amb_thresh
+        fail_amb = amb_ratio > amb_threshold
         fail_len = abs(robust_z) > z_threshold
 
         # QC fields (unchanged keys)
@@ -170,7 +170,7 @@ def filter_seqs(
             "status": "fail" if fail_illegal else "pass",
         }
         d["amb_ratio"] = {
-            "filter": amb_thresh,
+            "filter": amb_threshold,
             "value": amb_ratio,
             "status": "fail" if fail_amb else "pass",
         }
@@ -338,7 +338,7 @@ def main() -> None:
         seqs = exclude_seqs(seqs, args.exclusions)
 
     consolidated = consolidate_seqs(seqs)
-    qc_results, fasta_pass = filter_seqs(consolidated, args.amb_threshold, args.z_threshold, args.min_canonical, metadata_map=metadata_map, plot_file=os.path.join(args.outdir, f"{taxon}-{segment}.len_dist_input.jpg"))
+    qc_results, fasta_pass = filter_seqs(consolidated, amb_threshold=args.amb_threshold, z_threshold=args.z_threshold, min_canonical=args.min_canonical, metadata_map=metadata_map, plot_file=os.path.join(args.outdir, f"{taxon}-{segment}.len_dist_input.jpg"))
     save_output(qc_results, fasta_pass, taxon, segment, args.outdir)
 
     print(f"Raw Count: {len(seqs)}\nFinal Count: {len(fasta_pass)}")
