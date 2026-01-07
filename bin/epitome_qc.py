@@ -107,7 +107,7 @@ def filter_seqs(
     """
     # Determine which sequences to use for the length statistics calculation.
     lengths: List[int] = []
-    lengths_select: List = []
+    lengths_select: List[int] = []
 
     if metadata_map:
         for d in data:
@@ -119,7 +119,7 @@ def filter_seqs(
 
     if not lengths_select or len(lengths_select) < int(min_canonical):
         LOGGER.info("Using all sequences for length filtering (Too few canonical sequences supplied)")
-        lengths = lengths_select
+        lengths_select = lengths
     else:
         LOGGER.info(f"Using canonical sequences for length filtering (n={len(lengths_select)})")
 

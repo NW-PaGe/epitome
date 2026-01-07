@@ -351,7 +351,7 @@ def modified_zscore(data, z_threshold):
 
     return med_len, mad, mad_sigma, lower, upper
 
-def plot_distribution(values, outfile, bins=50, title=None, cutoffs=None):
+def plot_distribution(values, outfile, bins=50, title=None, cutoffs=None, x_label="Sequence Length"):
     """
     Plot a histogram with lower, median, and upper vertical lines.
 
@@ -375,7 +375,7 @@ def plot_distribution(values, outfile, bins=50, title=None, cutoffs=None):
     if title:
         plt.title(title)
 
-    plt.xlabel("Value")
+    plt.xlabel(x_label)
     plt.ylabel("Count")
     plt.legend()
     plt.tight_layout()
