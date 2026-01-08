@@ -56,7 +56,7 @@ def mark_length_outliers(
 
     # Plot distribution, if possible
     try:
-        plot_distribution(lengths, plot_file, cutoffs=(lower, med_len, upper))
+        plot_distribution(lengths, plot_file, cutoffs=(lower, med_len, upper), xlab="Sequence Length")
     except:
         LOGGER.warning("Distribution plot not created.")
 

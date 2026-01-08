@@ -351,7 +351,28 @@ def modified_zscore(data, z_threshold):
 
     return med_len, mad, mad_sigma, lower, upper
 
-def plot_distribution(values, outfile, bins=50, title=None, cutoffs=None, x_label="Sequence Length"):
+# Standard z-score (mean / stddev)
+def standard_zscore(data, z_threshold):
+    if len(data) >= 2:
+        mean = statistics.mean(data)
+        stdev = statistics.stdev(data)  # sample standard deviation
+
+        if stdev > 0:
+            lower = mean - (z_threshold * stdev)
+            upper = mean + (z_threshold * stdev)
+        else:
+            lower = upper = mean
+
+    elif len(data) == 1:
+        mean = data[0]
+        stdev = 0.0
+        lower = upper = mean
+    else:
+        mean = stdev = lower = upper = 0.0
+
+    return mean, stdev, lower, upper
+
+def plot_distribution(values, outfile, bins=50, title=None, cutoffs=None, xlab = "Value"):
     """
     Plot a histogram with lower, median, and upper vertical lines.
 
@@ -364,18 +385,18 @@ def plot_distribution(values, outfile, bins=50, title=None, cutoffs=None, x_labe
     values = np.asarray(values)
 
     if cutoffs:
-        lower, median, upper = cutoffs
+        lower, middle, upper = cutoffs
 
     plt.figure()
     plt.hist(values, bins=bins)
     plt.axvline(lower, color="red", linestyle="--", label=f"Lower: {lower:.2f}")
-    plt.axvline(median, color="black", linestyle="-",  label=f"Median: {median:.2f}")
+    plt.axvline(middle, color="black", linestyle="-",  label=f"Middle: {middle:.2f}")
     plt.axvline(upper, color="red", linestyle="--", label=f"Upper: {upper:.2f}")
 
     if title:
         plt.title(title)
 
-    plt.xlabel(x_label)
+    plt.xlabel(xlab)
     plt.ylabel("Count")
     plt.legend()
     plt.tight_layout()
