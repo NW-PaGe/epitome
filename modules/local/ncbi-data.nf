@@ -3,7 +3,7 @@ process NCBI_DATA {
     label 'process_medium'
 
     input:
-    tuple val(taxon)
+    tuple val(taxon), val(min_length)
 
     output:
     tuple val(taxon), path("*.fa.gz"), path("*.json"), emit: data
@@ -62,7 +62,7 @@ process NCBI_DATA {
     #---- COMBINE ----#
     ${tool} \\
         --taxon ${taxon.replace(' ', '_')} \\
-        --min-length ${params.min_length} \\
+        --min-length ${min_length} \\
         --datasets_genome_fasta data/datasets-genome.fa \\
         --datasets_genome_json data/datasets-genome.jsonl \\
         --datasets_taxonomy data/datasets-taxonomy.json \\

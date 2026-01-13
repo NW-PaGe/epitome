@@ -75,6 +75,7 @@ workflow EPITOME {
                 metadata: it.containsKey('metadata') ? ( it.metadata ? it.metadata.split(';').collect{f -> file(f, checkIfExists: true)} : [] ) : [],
                 segmented: it.containsKey('segmented') ? it.segmented.toLowerCase() == 'true' : false,
                 exclusions: it.containsKey('exclusions') ? ( it.exclusions ? file(it.exclusions, checkIfExists: true) : [] ) : [],
+                min_length: it.containsKey('min_length') ? it.min_length : params.min_length
             ]
         }
         .set{ ch_input }
