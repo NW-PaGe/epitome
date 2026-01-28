@@ -21,7 +21,7 @@ workflow CREATE_SUBWF {
     =============================================================================================================================
     */
     INPUT_QC(
-        ch_input.map{ [ it.taxon, it.segment, it.assembly, it.exclusions ] }
+        ch_input.map{ [ it.taxon, it.segment, it.data, it.exclusions ? it.exclusions : [] ] }
     )
     ch_versions = ch_versions.mix(INPUT_QC.out.versions.first())
     INPUT_QC.out.seqs.set{ ch_input_qc }
@@ -40,7 +40,7 @@ workflow CREATE_SUBWF {
             .out
             .summary
             .join(ch_clusters, by: [0,1])
-            .join( ch_input.map{ [ it.taxon, it.segment, it.metadata ] }, by: [0,1] )
+            .join( ch_input.map{ [ it.taxon, it.segment, it.data ] }, by: [0,1] )
             .concat(ch_summary)
             .map{ it += ['centroid'] }
             .set{ch_summary}
@@ -99,7 +99,7 @@ workflow CREATE_SUBWF {
             .out
             .summary
             .join(CONDENSE.out.results, by: [0,1])
-            .join( ch_input.map{ [ it.taxon, it.segment, it.metadata ] }, by: [0,1] )
+            .join( ch_input.map{ [ it.taxon, it.segment, it.data ] }, by: [0,1] )
             .map{ it += ['consensus'] }
             .concat(ch_summary)
             .set{ch_summary}

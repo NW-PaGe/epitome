@@ -1,6 +1,6 @@
 process CONDENSE {
     tag "${prefix}"
-    label "process_high"
+    label "process_medium"
     stageInMode 'copy'
 
     input:
@@ -27,8 +27,8 @@ process CONDENSE {
         --ksize ${params.ksize} \\
         --scaled ${params.scaled} \\
         --fasta ${seqs}
-
-    # version info
+        
+    # version info 
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":
         ${tool}: "\$(${tool} --version 2>&1 | tr -d '\\r')"

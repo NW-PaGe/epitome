@@ -7,6 +7,7 @@ process SUMMARY {
 
     output:
     tuple val(taxon), val(segment), path("${prefix}.jsonl.gz"),   emit: json
+    tuple val(taxon), val(segment), path("*.jpg"),                emit: plot, optional: true
     path "versions.yml",                                          emit: versions
 
     when:
@@ -23,7 +24,8 @@ process SUMMARY {
         --method ${method} \\
         --qc ${qc_json} \\
         --clusters ${clusters_json} \\
-        --meta ${meta_csv}
+        --meta ${meta_csv} \\
+        --z_threshold ${params.z_threshold}
 
     # version info
     cat <<-END_VERSIONS > versions.yml

@@ -1,14 +1,15 @@
 process INPUT_QC {
     tag "${prefix}"
-    label 'process_low'
+    label 'process_high'
     stageInMode 'copy'
 
     input:
-    tuple val(taxon), val(segment), path(sequences), path(exclusions)
+    tuple val(taxon), val(segment), path(jsonl), path(exclusions)
 
     output:
     tuple val(taxon), val(segment), path("${prefix}.qc.fa.gz"),    emit: seqs, optional: true
     tuple val(taxon), val(segment), path("${prefix}.qc.jsonl.gz"), emit: summary
+    tuple val(taxon), val(segment), path("*.jpg"),                 emit: plot, optional: true
     path "versions.yml",                                           emit: versions
 
 
@@ -20,11 +21,11 @@ process INPUT_QC {
     tool = "epitome_qc.py"
     """
     ${tool} \\
-        --taxon "${taxon}" \\
-        --segment "${segment}" \\
+        --z_threshold ${params.z_threshold} \\
+        --min_canonical ${params.min_canonical} \\
         --amb_threshold ${params.amb_threshold} \\
-        --len_threshold ${params.len_threshold} \\
-        --fasta "${sequences}"
+        ${exclusions ? "--exclusions ${exclusions}" : ''} \\
+        ${jsonl}
 
     # version info
     cat <<-END_VERSIONS > versions.yml

@@ -1,6 +1,6 @@
 process CONSENSUS {
     tag "${prefix}"
-    label 'process_high'
+    label 'process_medium'
     stageInMode 'copy'
 
     input:

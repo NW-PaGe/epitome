@@ -18,7 +18,7 @@ workflow NCBI_DATA_SUBWF {
     */
     // MODULE: Gather NCBI data for taxon
     NCBI_DATA(
-        ch_input.map{ it.taxon }.unique()
+        ch_input.map{ [ it.taxon, it.min_length ] }.unique()
     )
     ch_versions = ch_versions.mix(NCBI_DATA.out.versions.first())
 

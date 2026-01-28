@@ -13,9 +13,9 @@ import json
 import logging
 import gzip
 import textwrap
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Optional
 
-from epitome_utils import sanitize_filename, read_csv, normalize_keys, logging_config
+from epitome_utils import sanitize_filename, read_csv, normalize_keys, logging_config, modified_zscore, standard_zscore, plot_distribution
 
 # -------------------------------
 #  GLOBAL CONFIG
@@ -28,27 +28,6 @@ LOGGER = logging_config()
 # -------------------------------
 
 LEGAL_BASE_RE = re.compile(r"[-ATCGRYSWKMBDHVN]")
-
-def load_seqs(fasta: str) -> List[Dict[str, Any]]:
-    """Load sequences from FASTA and return list of dicts.
-
-    Args:
-        fasta: Path to input FASTA file.
-
-    Returns:
-        List of records, each with keys: accession (str), length (int), sequence (str).
-    """
-    sequences: List[Dict[str, Any]] = []
-    for record in screed.open(fasta):
-        accession = record.name.split()[0]
-        seq = record.sequence.upper()
-        sequences.append({
-            "accession": accession,
-            "length": len(seq),
-            "sequence": seq
-        })
-    LOGGER.info(f'Loaded {len(sequences)} sequences from {fasta}')
-    return sequences
 
 
 def exclude_seqs(sequences: List[Dict[str, Any]], exclusions_path: str) -> List[Dict[str, Any]]:
@@ -65,7 +44,7 @@ def exclude_seqs(sequences: List[Dict[str, Any]], exclusions_path: str) -> List[
 
     rows = read_csv(exclusions_path)
     # Be tolerant of header case
-    rows = [normalize_keys(r, lower_keys=True) for r in rows]
+    rows = [normalize_keys(r) for r in rows]
     excluded = {r["accession"] for r in rows if "accession" in r and r["accession"]}
 
     if not excluded:
@@ -104,47 +83,169 @@ def consolidate_seqs(sequences: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     LOGGER.info(f'Consolidated {initial_count} to {len(data)} unique sequences')
     return data
 
+def filter_seqs(
+    data: List[Dict[str, Any]],
+    amb_thresh: float,
+    z_threshold: float,
+    min_canonical: int,
+    metadata_map: Optional[Dict[str, Dict[str, Any]]] = None,
+    n_edge_len_fails: int = 5,
+    plot_file: str = 'length_distribution.jpg'
+) -> Tuple[List[Dict[str, Any]], List[str]]:
+    """Apply illegal base, ambiguous base (N), and robust MAD z-score length filters.
 
-def filter_seqs(data: List[Dict[str, Any]], amb_thresh: float, len_thresh: float) -> Tuple[List[Dict[str, Any]], List[str]]:
-    """Apply illegal base, ambiguous base (N), and length filters.
+    Length filtering uses:
+        z = (length - median_len) / (1.4826 * MAD)
+    Flags sequences on both tails:
+        abs(z) > z_threshold
 
-    Args:
-        data: Consolidated sequence records.
-        amb_thresh: Maximum allowed fraction of 'N' bases.
-        len_thresh: Fractional tolerance around median length for pass.
+    Also logs a small "edge" report of the length failures that were closest
+    to the cutoff.
 
     Returns:
         (Updated records with QC fields, list of FASTA records that passed).
     """
-    lengths = [d["length"] for d in data]
-    median = statistics.median(lengths) if lengths else 0
-    lower = median * (1 - len_thresh)
-    upper = median * (1 + len_thresh)
+    # Determine which sequences to use for the length statistics calculation.
+    lengths: List[int] = []
+    lengths_select: List = []
 
-    def test(flag: bool) -> str:
-        return "fail" if flag else "pass"
+    if metadata_map:
+        for d in data:
+            for acc in d.get("accessions", []):
+                lengths.append(d["length"])
+                m = metadata_map.get(acc)
+                if isinstance(m, dict) and m.get("canonical") is True:
+                    lengths_select.append(d["length"])
+
+    if not lengths or len(lengths_select) < min_canonical:
+        LOGGER.info("Using all sequences for length filtering (Too few canonical sequences supplied)")
+        lengths_select = lengths
+    else:
+        LOGGER.info(f"Using canonical sequences for length filtering (n={len(lengths_select)})")
+
+    med_len, mad, mad_sigma, lower, upper = modified_zscore(lengths_select, z_threshold)
+
+    if mad == 0:
+        LOGGER.info("MAD=0; using standard z-score")
+        mean, stdev, lower, upper = standard_zscore(lengths_select, z_threshold)
+        LOGGER.info(
+            f"Lengths: min={min(lengths_select) if lengths_select else 0} max={max(lengths_select) if lengths_select else 0} "
+            f"mean={mean:.2f} stdev={stdev:.2f} | "
+            f"range=[{lower:.2f}, {upper:.2f}] (threshold={z_threshold})"
+        )
+        middle = mean
+        sigma = stdev
+    else:
+        LOGGER.info(
+            f"Lengths: min={min(lengths_select) if lengths_select else 0} max={max(lengths_select) if lengths_select else 0} "
+            f"median={med_len:.2f} MAD={mad:.2f} (sigma~{mad_sigma:.2f}) | "
+            f"range=[{lower:.2f}, {upper:.2f}] (threshold={z_threshold})"
+        )
+        middle = med_len
+        sigma = mad_sigma
+
+    # Plot distribution, if possible
+    try:
+        plot_distribution(lengths, plot_file, cutoffs=(lower, middle, upper), xlab = "Sequence Length")
+    except:
+        LOGGER.warning("Distribution plot not created.")
 
     passing_fasta_records: List[str] = []
+
+    # Summary counters
+    n_total = len(data)
+    n_pass = 0
+    n_fail_any = 0
+    n_fail_illegal = 0
+    n_fail_amb = 0
+    n_fail_len = 0
+    n_fail_multiple = 0
+
+    # Track "edge" length failures: those closest to the cutoff but still failing
+    edge_len_fails = []
+
     for d in data:
         seq = d["sequence"]
         length = d["length"]
-        illegal = re.sub(LEGAL_BASE_RE, "", seq)
+
+        illegal = list(set(re.sub(LEGAL_BASE_RE, "", seq)))
         amb_ratio = (seq.count("N") / length) if length else 1.0
+        z = (length - med_len) / sigma if sigma > 0 else 0.0
 
         fail_illegal = len(illegal) > 0
         fail_amb = amb_ratio > amb_thresh
-        fail_len = (length < lower) or (length > upper)
+        fail_len = abs(z) > z_threshold
 
-        d["illegal_bases"] = {"filter": illegal, "value": illegal, "status": test(fail_illegal)}
-        d["amb_ratio"] = {"filter": amb_thresh, "value": amb_ratio, "status": test(fail_amb)}
-        d["length"] = {"filter": len_thresh, "value": length, "status": test(fail_len)}
+        # QC fields (unchanged keys)
+        d["illegal_bases"] = {
+            "filter": illegal,
+            "value": illegal,
+            "status": "fail" if fail_illegal else "pass",
+        }
+        d["amb_ratio"] = {
+            "filter": amb_thresh,
+            "value": amb_ratio,
+            "status": "fail" if fail_amb else "pass",
+        }
+        d["length_z_score"] = {
+            "filter": z_threshold,
+            "value": z,
+            "length": length,
+            "status": "fail" if fail_len else "pass",
+        }
 
-        if not (fail_illegal or fail_amb or fail_len):
+        # Edge tracking for length failures (closest to cutoff)
+        if fail_len:
+            abs_over = abs(abs(z) - z_threshold)  # small => barely failed
+            edge_len_fails.append((abs_over, length, d["accessions"]))
+
+
+        fail_reasons = int(fail_illegal) + int(fail_amb) + int(fail_len)
+
+        if fail_reasons == 0:
+            n_pass += 1
             passing_fasta_records.append(f">{d['seq_id']}\n{seq}")
+        else:
+            n_fail_any += 1
+            if fail_reasons > 1:
+                n_fail_multiple += 1
+            if fail_illegal:
+                n_fail_illegal += 1
+            if fail_amb:
+                n_fail_amb += 1
+            if fail_len:
+                n_fail_len += 1
 
-    LOGGER.info(f'{len(passing_fasta_records)} sequences passed all filters')
+    # Summary
+    LOGGER.info(
+        f"Filter summary: total={n_total} pass={n_pass} fail_any={n_fail_any} | "
+        f"fail_illegal={n_fail_illegal} fail_amb={n_fail_amb} fail_len={n_fail_len} "
+        f"(multi_reason_fail={n_fail_multiple})"
+    )
+
+    if n_total > 0:
+        LOGGER.info(
+            f"Fail rates: any={n_fail_any / n_total:.3%} illegal={n_fail_illegal / n_total:.3%} "
+            f"amb={n_fail_amb / n_total:.3%} len={n_fail_len / n_total:.3%} "
+            f"multi_reason={n_fail_multiple / n_total:.3%}"
+        )
+
+        if edge_len_fails and n_edge_len_fails > 0:
+            edge_len_fails.sort(key=lambda t: t[0])
+            edge_len_fails = edge_len_fails[:n_edge_len_fails]
+
+            lines = [f"{acc}:{length}" for _, length, acc in edge_len_fails]
+
+            LOGGER.info(
+                f"Edge length fails (closest {len(lines)} of {n_fail_len} length fails): "
+                + ", ".join(lines)
+            )
+        else:
+            LOGGER.info("Edge length fails: none")
+
+
+    LOGGER.info(f"{len(passing_fasta_records)} sequences passed all filters")
     return data, passing_fasta_records
-
 
 def save_output(json_data: List[Dict[str, Any]], fasta_data: List[str], taxon: str, segment: str, outdir: str) -> None:
     """Save JSONL and FASTA outputs to compressed files.
@@ -167,7 +268,7 @@ def save_output(json_data: List[Dict[str, Any]], fasta_data: List[str], taxon: s
         for row in json_data:
             out = {
                 k: row.get(k)
-                for k in ["seq_id", "illegal_bases", "amb_ratio", "length", "accessions"]
+                for k in ["seq_id", "illegal_bases", "amb_ratio", "length_z_score", "accessions"]
             }
             out.update({"taxon": taxon, "segment": segment})
             f.write(json.dumps(out, sort_keys=True) + "\n")
@@ -182,6 +283,38 @@ def save_output(json_data: List[Dict[str, Any]], fasta_data: List[str], taxon: s
     else:
         LOGGER.info(f"All sequences failed QC. Nothing to save.")
 
+def load_input(filepath):
+    LOGGER.info(f"Loading file: {filepath}")
+    metadata: Dict[str, Dict[str, Any]] = {}
+    seqs: list = []
+    count = 0
+    taxon_segment = set()
+
+    with gzip.open(filepath, "rt", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            entry = json.loads(line)
+            if isinstance(entry, dict) and 'accession' in entry:
+                metadata[str(entry['accession'])] = {k: v for k, v in entry.items() if k not in ['accession', 'sequence']}
+                seqs.append(
+                    {'sequence': entry['sequence'].upper(), 
+                    'length': len(entry['sequence']), 
+                    'accession': entry['accession']
+                    })
+                count += 1
+                if entry.get('taxon') and entry.get('segment'):
+                    taxon_segment.add((entry['taxon'], entry['segment']))
+    
+    if len(taxon_segment) == 1:
+        taxon_segment = list(taxon_segment)[0]
+    else:
+        raise ValueError("One taxon / segment required")
+
+    LOGGER.info(f"Loaded {count} records from {filepath}")
+    return metadata, seqs, taxon_segment
+
 
 # -------------------------------
 #  MAIN
@@ -195,14 +328,13 @@ def main() -> None:
     compressed JSONL and FASTA outputs.
 
     """
-    version = "2.0"
+    version = "2.1"
 
     parser = argparse.ArgumentParser(description="QC and deduplication for FASTA sequences")
-    parser.add_argument("--fasta", required=True, help="Input FASTA file.")
-    parser.add_argument("--taxon", default='null', help="Taxon name.")
-    parser.add_argument("--segment", default='null', help="Segment name.")
+    parser.add_argument("input", help="Optional JSONL with canonical sequence metadata")
     parser.add_argument("--amb_threshold", type=float, default=0.02, help="Max N base ratio.")
-    parser.add_argument("--len_threshold", type=float, default=0.20, help="Length tolerance fraction.")
+    parser.add_argument("--z_threshold", type=float, default=2.58, help="Maximum z-score (standard deviations from mean) for length filtering.")
+    parser.add_argument("--min_canonical", type=int, default=10, help="Minimum number of canonical samples required for calculating the z-score range.")
     parser.add_argument("--exclusions", help="CSV file with accessions to exclude.")
     parser.add_argument("--outdir", default="./", help="Output directory.")
     parser.add_argument("--version", action="version", version=version, help="Show script version and exit.")
@@ -213,13 +345,14 @@ def main() -> None:
 
     os.makedirs(args.outdir, exist_ok=True)
 
-    seqs = load_seqs(args.fasta)
+    metadata_map, seqs, (taxon, segment) = load_input(args.input)
+
     if args.exclusions:
         seqs = exclude_seqs(seqs, args.exclusions)
 
     consolidated = consolidate_seqs(seqs)
-    qc_results, fasta_pass = filter_seqs(consolidated, args.amb_threshold, args.len_threshold)
-    save_output(qc_results, fasta_pass, args.taxon, args.segment, args.outdir)
+    qc_results, fasta_pass = filter_seqs(consolidated, args.amb_threshold, args.z_threshold, args.min_canonical, metadata_map=metadata_map, plot_file=os.path.join(args.outdir, f"{taxon}-{segment}.len_dist_input.jpg"))
+    save_output(qc_results, fasta_pass, taxon, segment, args.outdir)
 
     print(f"Raw Count: {len(seqs)}\nFinal Count: {len(fasta_pass)}")
 

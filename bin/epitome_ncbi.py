@@ -200,7 +200,8 @@ def main() -> None:
     parser.add_argument("--datasets_genome_fasta", required=True, help="Path to genomic.fna from 'datasets download virus genome taxon'.")
     parser.add_argument("--datasets_genome_json", required=True, help="Path to 'data_report.jsonl' from 'datasets download virus genome taxon'.")
     parser.add_argument("--datasets_taxonomy_json", required=True, help="Path to JSON from 'datasets summary taxonomy taxon'.")
-    parser.add_argument("--edirect_json", required=True, help="Path to JSON or JSONL from EDirect esummary/efetch docsum.")
+    parser.add_argument("--edirect_json",default=None, help="Optional: Path to JSON or JSONL from EDirect esummary/efetch docsum. If omitted, no subtype fields are added.")
+    parser.add_argument("--min-length",default=800, type=int, help="Minimum sequence length to be included.")
     parser.add_argument("--out_dir", default=".", help="Output directory.")
     parser.add_argument("--version", action="version", version=version, help="Show script version and exit.")
     args = parser.parse_args()
@@ -232,21 +233,26 @@ def main() -> None:
         LOGGER.exception(f"Failed to load taxonomy JSON/JSONL: {e}")
         sys.exit(2)
 
-    try:
-        edirect_json_obj = load_json_or_jsonl(args.edirect_json)
-        LOGGER.info(f"Loaded EDirect docsum ({args.edirect_json})")
-    except Exception as e:
-        LOGGER.exception(f"Failed to load EDirect JSON/JSONL: {e}")
-        sys.exit(2)
-
     taxid_name_map = extract_taxids(ds_taxa_json)
     LOGGER.debug(f"taxid->species entries: {len(taxid_name_map)}")
 
-    subtypes_map = parse_edirect_json_docsum(edirect_json_obj)
-    LOGGER.debug(f"subtype entries: {len(subtypes_map)}")
+    subtypes_map: dict[str, dict[str, str]] = {}
+    if args.edirect_json:
+        try:
+            edirect_json_obj = load_json_or_jsonl(args.edirect_json)
+            LOGGER.info("Loaded EDirect docsum (%s)", args.edirect_json)
+        except Exception as e:
+            LOGGER.exception("Failed to load EDirect JSON/JSONL: %s", e)
+            sys.exit(2)
+
+        subtypes_map = parse_edirect_json_docsum(edirect_json_obj)
+        LOGGER.debug("subtype entries: %d", len(subtypes_map))
+    else:
+        LOGGER.info("No --edirect_json provided; proceeding without subtype annotations.")
 
     rows: list[dict] = []
     missing_accession = 0
+    short_sequences   = 0
     for i, rec in enumerate(ds_genome_list, 1):
         accession = rec.get("accession")
         if not accession:
@@ -255,10 +261,15 @@ def main() -> None:
                 LOGGER.warning(f"Record #{i} missing 'accession'; skipping")
             continue
 
+        length = rec.get('length')
+        if not length or int(length) < int(args.min_length):
+            short_sequences += 1
+            continue
+
         # Preserve raw segment value exactly; if absent, None.
         segment = rec.get("segment")
         if segment is None:
-            segment = None  # explicit for clarity
+            segment = None
 
         virus_lineage = (rec.get("virus") or {}).get("lineage") or []
         species_name, species_taxid = lineage_to_species_and_taxid(virus_lineage, taxid_name_map)
@@ -271,13 +282,15 @@ def main() -> None:
         base = {
             "accession": accession,
             "taxon": args.taxon,
-            "segment": segment,  # raw or None
+            "segment": segment,
             "species": species_name,
             "taxId": species_taxid,
             "host": host,
             "collectionDate": collection_date,
             "geographicRegion": geographic_region,
+            "canonical": ((rec.get("sourceDatabase", '').lower() == "refseq" ) and (rec.get("completeness", '').lower() == "complete")),
         }
+
 
         sub = (subtypes_map.get(accession) or {})
         rows.append({**base, **sub})
@@ -287,6 +300,9 @@ def main() -> None:
 
     if missing_accession:
         LOGGER.warning(f"Skipped {missing_accession} records without accession")
+
+    if short_sequences:
+        LOGGER.warning(f"Skipped {short_sequences} records with short sequences (<{args.min_length})")
 
     # Simple visibility on what we saw, without transforming names
     unique_segments = sorted({str(r.get("segment")) for r in rows})

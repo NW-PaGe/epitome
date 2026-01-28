@@ -28,10 +28,16 @@
                     "description": "The output directory where the results will be saved.",
                     "fa_icon": "fas fa-folder-open"
                 },
-                "len_threshold": {
+                "z_threshold": {
                     "type": "number",
-                    "default": 0.2,
-                    "description": "Maximum length difference (+/-) of an input sequence compared to the expected sequence size.",
+                    "default": 3,
+                    "description": "Modified Z-score threshold used for identifying sequence outliers by length.",
+                    "fa_icon": "fas fa-chart-pie"
+                },
+                "min_canonical": {
+                    "type": "integer",
+                    "default": 10,
+                    "description": "Minimum number of canonical sequences required for estimating z-score of input sequences",
                     "fa_icon": "fas fa-chart-pie"
                 },
                 "amb_threshold": {
@@ -39,6 +45,22 @@
                     "default": 0.02,
                     "description": "Maximum percent of bases that can be ambiguous (N) in an input sequence.",
                     "fa_icon": "fas fa-chart-pie"
+                },
+                "edirect": {
+                    "type": "boolean",
+                    "fa_icon": "fas fa-database",
+                    "description": "Pull additional metadata from NCBI EDirect."
+                },
+                "complete_only": {
+                    "type": "boolean",
+                    "fa_icon": "fas fa-spinner",
+                    "description": "Include only complete sequences from NCBI. Completeness is based on what the submitter says. Not reliable."
+                },
+                "min_length": {
+                    "type": "integer",
+                    "default": 800,
+                    "fa_icon": "fas fa-ruler-horizontal",
+                    "description": "Minimum sequence length filter applied to NCBI downloads"
                 },
                 "email": {
                     "type": "string",

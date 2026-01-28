@@ -33,6 +33,7 @@ ch_multiqc_custom_methods_description = params.multiqc_methods_description ? fil
 */
 include { NCBI_DATA_SUBWF } from '../subworkflows/local/ncbi-data'
 include { MERGE_INPUTS    } from '../modules/local/merge-inputs'
+include { CLASSIFY        } from '../modules/local/classify'
 include { CREATE_SUBWF    } from '../subworkflows/local/create'
 
 /*
@@ -74,6 +75,7 @@ workflow EPITOME {
                 metadata: it.containsKey('metadata') ? ( it.metadata ? it.metadata.split(';').collect{f -> file(f, checkIfExists: true)} : [] ) : [],
                 segmented: it.containsKey('segmented') ? it.segmented.toLowerCase() == 'true' : false,
                 exclusions: it.containsKey('exclusions') ? ( it.exclusions ? file(it.exclusions, checkIfExists: true) : [] ) : [],
+                min_length: it.containsKey('min_length') ? it.min_length : params.min_length
             ]
         }
         .set{ ch_input }
@@ -138,35 +140,29 @@ workflow EPITOME {
         ch_input.map{ [ it.taxon, it.assembly, it.metadata, it.segmented ] }
     )
     ch_versions = ch_versions.mix(MERGE_INPUTS.out.versions.first())
-    MERGE_INPUTS
-        .out
-        .man
-        .splitCsv(header: true)
-        .set{ch_input_man}
-    
-    MERGE_INPUTS
-        .out
-        .fa
-        .transpose()
-        .map{ taxon, f -> [taxon, file(f).getName(), f] }
-        .join(ch_input_man.map{ taxon, data -> [taxon, data.assembly, data.segment] }, by: [0,1])
-        .map{ taxon, f_name, f, segment -> [taxon, segment, f] }
-        .set{ch_input_fa}
 
-    MERGE_INPUTS
-        .out
-        .meta
-        .transpose()
-        .map{ taxon, f -> [taxon, file(f).getName(), f] }
-        .join(ch_input_man.map{ taxon, data -> [taxon, data.metadata, data.segment] }, by: [0,1])
-        .map{ taxon, f_name, f, segment -> [taxon, segment, f] }
-        .set{ch_input_meta}
+    CLASSIFY (
+        ch_input
+            .filter{ it.segmented }
+            .map{ [it.taxon] }
+            .join(MERGE_INPUTS.out.jsonl)
+    )
 
-    ch_input_fa
-        .join(ch_input_meta, by: [0,1])
-        .combine(ch_input.map{[it.taxon, it.exclusions]}, by: 0)
-        .map{ taxon, segment, assembly, metadata, exclusions -> [taxon: taxon, segment: segment, assembly: assembly ? assembly : [], metadata: metadata ? metadata : [], exclusions: exclusions ? exclusions : []] }
-        .set{ ch_input }
+    CLASSIFY
+        .out
+        .jsonl
+        .transpose()
+        .map{ taxon, jsonl -> [ taxon, jsonl.simpleName.tokenize('-').last(), jsonl ] }
+    .concat(
+        ch_input
+            .filter{ ! it.segmented }
+            .map{ [it.taxon] }
+            .join(MERGE_INPUTS.out.jsonl)
+            .map{ taxon, jsonl -> [taxon, 'wg', jsonl] }
+    )
+    .combine(ch_input.map{[it.taxon, it.exclusions]}, by: 0)
+    .map{ taxon, seg, jsonl, exclusions -> [taxon: taxon, segment: seg, data: jsonl, exclusions: exclusions ] }
+    .set{ ch_input }
 
     /*
     =============================================================================================================================

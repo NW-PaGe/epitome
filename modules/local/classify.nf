@@ -1,10 +1,10 @@
-process MERGE_INPUTS {
+process CLASSIFY {
     tag "${prefix}"
     label 'process_high'
     stageInMode 'copy'
 
     input:
-    tuple val(taxon), path(assembly), path(metadata), val(segmented)
+    tuple val(taxon), path(jsonl)
 
     output:
     tuple val(taxon), path("*.jsonl.gz"), emit: jsonl
@@ -16,15 +16,12 @@ process MERGE_INPUTS {
     script:
     def args         = task.ext.args   ?: ''
     prefix = "${taxon.replaceAll(' ','_')}"
-    tool = "epitome_inputs.py"
+    tool = "epitome_classify.py"
     """
-    # combine metadata
     ${tool} \\
-        --taxon "${taxon}" \\
-        --assembly ${assembly} \\
-        --metadata ${metadata} \\
-        ${segmented ? '--segmented' : ''} \\
-        ${args}
+        ${args} \\
+        ${jsonl}
+        
 
     # version info
     cat <<-END_VERSIONS > versions.yml
