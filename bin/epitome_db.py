@@ -155,10 +155,10 @@ def parse_edirect_json_docsum(objs) -> dict[str, dict[str, str]]:
 
 
 def lineage_to_species_and_taxid(lineage_list, taxid_name_map):
-    """First lineage entry whose taxId is in the taxid->name map."""
+    """Most specific lineage entry whose taxId is in the map (lineage runs broad -> narrow)."""
     if not isinstance(lineage_list, list):
         return None, None
-    for item in lineage_list:
+    for item in reversed(lineage_list):
         taxid = item.get("taxId")
         if taxid is None:
             continue
@@ -220,7 +220,7 @@ def iter_fasta(fh) -> Iterator[tuple[str, str]]:
 
 
 # ---------------------------------------------------------------------------
-# NCBI calls (verify flags against `datasets ... --help` for your CLI version)
+# NCBI calls 
 # ---------------------------------------------------------------------------
 
 def datasets_version() -> str:
@@ -234,14 +234,14 @@ def datasets_version() -> str:
 def run_datasets_download(taxon: str, zip_path: Path, updated_since: Optional[str],
                           complete_only: bool) -> None:
     cmd = ["datasets", "download", "virus", "genome", "taxon", taxon,
-           "--filename", str(zip_path), "--no-progressbar"]
+           "--filename", str(zip_path), "--no-progressbar", "--include", "genome"]
     if complete_only:
         cmd.append("--complete-only")
     if updated_since:
-        cmd += ["--updated-since", updated_since]
+        # datasets v14+ replaced --updated-since with --updated-after (MM/DD/YYYY)
+        d = datetime.strptime(updated_since, "%Y-%m-%d").strftime("%m/%d/%Y")
+        cmd += ["--updated-after", d]
     LOG.info("Running: %s", " ".join(cmd))
-    # NOTE: check how your datasets version behaves when nothing matches
-    # --updated-since (empty zip vs non-zero exit) and handle it here if needed.
     res = subprocess.run(cmd, capture_output=True, text=True)
     if res.returncode != 0:
         raise RuntimeError(f"datasets download failed ({res.returncode}): {res.stderr.strip()}")
@@ -444,6 +444,7 @@ def sync(con, taxon: str, force_full: bool = False, overlap_days: int = 3,
 def build(con, taxon: str, out_dir: Path, min_length: int = 800) -> dict:
     out_dir.mkdir(parents=True, exist_ok=True)
     taxid_name_map = dict(con.execute("SELECT taxid, name FROM taxa").fetchall())
+    label = taxon.replace(" ", "_")  # same as the Nextflow module: spaces -> underscores
 
     subtype_map: dict[str, dict[str, str]] = defaultdict(dict)
     for acc, k, v in con.execute(
@@ -466,7 +467,7 @@ def build(con, taxon: str, out_dir: Path, min_length: int = 800) -> dict:
         lineage = ((json.loads(report).get("virus") or {}).get("lineage")) or []
         species, taxid = lineage_to_species_and_taxid(lineage, taxid_name_map)
         base = {
-            "accession": acc, "taxon": taxon, "segment": seg, "species": species,
+            "accession": acc, "taxon": label, "segment": seg, "species": species,
             "taxId": taxid, "host": host, "collectionDate": cdate,
             "geographicRegion": region,
             "canonical": src.lower() == "refseq",
@@ -477,8 +478,8 @@ def build(con, taxon: str, out_dir: Path, min_length: int = 800) -> dict:
         rows.append({**base, **subtype_map.get(acc, {})})
         seqs.append((acc, seq))
 
-    json_path = out_dir / f"{taxon}.json"
-    fasta_path = out_dir / f"{taxon}.fa.gz"
+    json_path = out_dir / f"{label}.json"
+    fasta_path = out_dir / f"{label}.fa.gz"
     with json_path.open("w", encoding="utf-8") as f:
         json.dump(rows, f, ensure_ascii=False, indent=2)
     with gzip.open(fasta_path, "wt", encoding="utf-8") as f:
@@ -495,7 +496,7 @@ def build(con, taxon: str, out_dir: Path, min_length: int = 800) -> dict:
         "last_successful_sync": last_sync.isoformat() if last_sync else None,
         "built_at": datetime.now(timezone.utc).isoformat(),
     }
-    (out_dir / f"{taxon}.manifest.json").write_text(json.dumps(manifest, indent=2))
+    (out_dir / f"{label}.manifest.json").write_text(json.dumps(manifest, indent=2))
     LOG.info("Built %s: %d records, accession hash %s", taxon, len(rows), acc_hash[:12])
     return manifest
 
@@ -523,7 +524,7 @@ def main() -> None:
     s.add_argument("--complete-only", action="store_true",
                    help="Pass --complete-only to datasets (off by default: NCBI 'complete' drops good assemblies)")
     s.add_argument("--no-subtypes", action="store_true")
-    s.add_argument("--taxonomy-args", default="", help="Extra flags for `datasets summary taxonomy taxon`")
+    s.add_argument("--taxonomy-args", default="--rank species", help="Extra flags for `datasets summary taxonomy taxon`")
 
     b = sub.add_parser("build", help="Write {taxon}.json / .fa.gz from the DB")
     b.add_argument("--db", required=True)
